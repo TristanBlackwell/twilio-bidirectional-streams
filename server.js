@@ -11,7 +11,7 @@ var wsserver = http.createServer(handleRequest);
 
 const accountSid = "AC...";
 const authToken = "...";
-const flowSid = "FW...";
+const flowSid = "FWde89ff2c2ef90af01986cb3df0d8450d";
 
 const openai = new OpenAI({
   apiKey: "sk-...",
@@ -129,7 +129,7 @@ class MediaStream {
       }
     });
     connection.on("close", this.close.bind(this));
-    //this.callSid = "";
+    this.callSid = "";
     this.hasSeenMedia = false;
     this.messages = [];
     this.repeatCount = 0;
@@ -195,36 +195,36 @@ class MediaStream {
     const messageByteBuffers = messages.map((msg) =>
       Buffer.from(msg.media.payload, "base64")
     );
-    // Combine all the bytes, and then base64 encode the entire payload.
-    const payload = Buffer.concat(messageByteBuffers).toString("base64");
-    const message = {
-      event: "media",
-      streamSid,
-      media: {
-        payload,
-      },
-    };
-    const messageJSON = JSON.stringify(message);
-    const payloadRE = /"payload":"[^"]*"/gi;
-    log(
-      `To Twilio: A single media event containing the exact audio from your previous ${messages.length} inbound media messages`,
-      messageJSON.replace(
-        payloadRE,
-        `"payload":"an omitted base64 encoded string with length of ${message.media.payload.length} characters"`
-      )
-    );
-    this.connection.sendUTF(messageJSON);
+    // // Combine all the bytes, and then base64 encode the entire payload.
+    // const payload = Buffer.concat(messageByteBuffers).toString("base64");
+    // const message = {
+    //   event: "media",
+    //   streamSid,
+    //   media: {
+    //     payload,
+    //   },
+    // };
+    // const messageJSON = JSON.stringify(message);
+    // const payloadRE = /"payload":"[^"]*"/gi;
+    // log(
+    //   `To Twilio: A single media event containing the exact audio from your previous ${messages.length} inbound media messages`,
+    //   messageJSON.replace(
+    //     payloadRE,
+    //     `"payload":"an omitted base64 encoded string with length of ${message.media.payload.length} characters"`
+    //   )
+    // );
+    // this.connection.sendUTF(messageJSON);
 
-    // Send a mark message
-    const markMessage = {
-      event: "mark",
-      streamSid,
-      mark: {
-        name: `Repeat message ${this.repeatCount}`,
-      },
-    };
-    log("To Twilio: Sending mark event", markMessage);
-    this.connection.sendUTF(JSON.stringify(markMessage));
+    // // Send a mark message
+    // const markMessage = {
+    //   event: "mark",
+    //   streamSid,
+    //   mark: {
+    //     name: `Repeat message ${this.repeatCount}`,
+    //   },
+    // };
+    // log("To Twilio: Sending mark event", markMessage);
+    // this.connection.sendUTF(JSON.stringify(markMessage));
     this.repeatCount++;
 
     this.wstream.write(Buffer.concat(messageByteBuffers));
@@ -276,18 +276,11 @@ class MediaStream {
       response_format: { type: "json_object" },
     });
 
-    log("completition: ", completion);
-    log("choice: ", completion.choices[0].message);
-    const json = JSON.stringify(
-      completion.choices[0].message.content.replaceAll("\n", "")
-    );
-    let { name, age } = JSON.parse(completion.choices[0].message.content);
-
-    log("Name, age: ", name, age);
+    const json = completion.choices[0].message.content.replace(/\n/g, "");
+    let { name, age } = JSON.parse(json);
 
     if (name && age) {
-      log("Have name & age: ", name, age);
-      await fetch(
+      const res = await fetch(
         `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls/${this.callSid}.json`,
         {
           method: "POST",
@@ -295,13 +288,19 @@ class MediaStream {
             "Content-Type": "application/x-www-form-urlencoded",
             Authorization: "Basic " + btoa(`${accountSid}:${authToken}`),
           },
-          body: encodeURIComponent(
-            `Twiml=<Response><Say>Returning you back to the Studio Flow</Say><Redirect>https://webhooks.twilio.com/v1/Accounts/${accountSid}/Flows/${flowSid}?FlowEvent=return&name=${name}&age=${age}</Redirect></Response>`
-          ),
+          body: `Twiml=<?xml version="1.0" encoding="UTF-8"?><Response><Redirect>https://webhooks.twilio.com/v1/Accounts/${accountSid}/Flows/${flowSid}?FlowEvent=return%26amp%3Bname=${name}%26amp%3Bage=${age}</Redirect></Response>`,
         }
       );
+
+      const body = await res.json();
+      if (res.ok) {
+        log("OK response: ", res.status, body);
+      } else {
+        log("Not OK response: ", res.status, body);
+      }
     } else {
       log("Name and age not identified");
+      this.connection.close(1000, "Name and age not identified");
     }
   }
 
