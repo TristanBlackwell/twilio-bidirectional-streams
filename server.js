@@ -2,93 +2,34 @@ const fs = require("fs");
 const path = require("path");
 const OpenAI = require("openai");
 
-var http = require("http");
-var HttpDispatcher = require("httpdispatcher");
-var WebSocketServer = require("websocket").server;
+const http = require("http");
+const HttpDispatcher = require("httpdispatcher");
+const { log, validateAndRetrieveEnv } = require("./util");
+const {
+  MULAW_HEADER,
+  HTTP_SERVER_PORT,
+  REPEAT_THRESHOLD,
+} = require("./constants");
+const WebSocketServer = require("websocket").server;
 
-var dispatcher = new HttpDispatcher();
-var wsserver = http.createServer(handleRequest);
+const dispatcher = new HttpDispatcher();
+const wsserver = http.createServer(handleRequest);
 
-const accountSid = "AC...";
-const authToken = "...";
-const flowSid = "FWde89ff2c2ef90af01986cb3df0d8450d";
+const {
+  TWILIO_ACCOUNT_SID,
+  TWILIO_AUTH_TOKEN,
+  TWILIO_FLOW_SID,
+  OPENAI_API_KEY,
+} = validateAndRetrieveEnv();
 
 const openai = new OpenAI({
-  apiKey: "sk-...",
+  apiKey: OPENAI_API_KEY,
 });
 
-const mulawHeader = Buffer.from([
-  0x52,
-  0x49,
-  0x46,
-  0x46,
-  0x62,
-  0xb8,
-  0x00,
-  0x00,
-  0x57,
-  0x41,
-  0x56,
-  0x45,
-  0x66,
-  0x6d,
-  0x74,
-  0x20,
-  0x12,
-  0x00,
-  0x00,
-  0x00,
-  0x07,
-  0x00,
-  0x01,
-  0x00,
-  0x40,
-  0x1f,
-  0x00,
-  0x00,
-  0x80,
-  0x3e,
-  0x00,
-  0x00,
-  0x02,
-  0x00,
-  0x04,
-  0x00,
-  0x00,
-  0x00,
-  0x66,
-  0x61,
-  0x63,
-  0x74,
-  0x04,
-  0x00,
-  0x00,
-  0x00,
-  0xc5,
-  0x5b,
-  0x00,
-  0x00,
-  0x64,
-  0x61,
-  0x74,
-  0x61,
-  0x00,
-  0x00,
-  0x00,
-  0x00, // Those last 4 bytes are the data length
-]);
-
-const HTTP_SERVER_PORT = 8080;
-const REPEAT_THRESHOLD = 50;
-
-var mediaws = new WebSocketServer({
+const mediaws = new WebSocketServer({
   httpServer: wsserver,
   autoAcceptConnections: true,
 });
-
-function log(message, ...args) {
-  console.log(new Date(), message, ...args);
-}
 
 function handleRequest(request, response) {
   try {
@@ -109,7 +50,7 @@ dispatcher.onPost("/twiml", function (req, res) {
     "Content-Length": stat.size,
   });
 
-  var readStream = fs.createReadStream(filePath);
+  const readStream = fs.createReadStream(filePath);
   readStream.pipe(res);
 });
 
@@ -128,16 +69,19 @@ class MediaStream {
         console.error("Error processing message:", error);
       }
     });
+
     connection.on("close", this.close.bind(this));
+
     this.callSid = "";
     this.hasSeenMedia = false;
     this.messages = [];
     this.repeatCount = 0;
+    this.transcribing = false;
 
     this.wstream = fs.createWriteStream("./audio.wav", {
       encoding: "binary",
     });
-    this.wstream.write(mulawHeader);
+    this.wstream.write(MULAW_HEADER);
   }
 
   /**
@@ -165,8 +109,12 @@ class MediaStream {
           // Store media messages
           this.messages.push(data);
           if (this.messages.length >= REPEAT_THRESHOLD) {
-            log(`From Twilio: ${this.messages.length} omitted media messages`);
-            await this.repeat();
+            if (!this.transcribing) {
+              log(
+                `From Twilio: ${this.messages.length} omitted media messages`
+              );
+            }
+            await this.write();
           }
           break;
         case "mark":
@@ -195,74 +143,102 @@ class MediaStream {
     const messageByteBuffers = messages.map((msg) =>
       Buffer.from(msg.media.payload, "base64")
     );
-    // // Combine all the bytes, and then base64 encode the entire payload.
-    // const payload = Buffer.concat(messageByteBuffers).toString("base64");
-    // const message = {
-    //   event: "media",
-    //   streamSid,
-    //   media: {
-    //     payload,
-    //   },
-    // };
-    // const messageJSON = JSON.stringify(message);
-    // const payloadRE = /"payload":"[^"]*"/gi;
-    // log(
-    //   `To Twilio: A single media event containing the exact audio from your previous ${messages.length} inbound media messages`,
-    //   messageJSON.replace(
-    //     payloadRE,
-    //     `"payload":"an omitted base64 encoded string with length of ${message.media.payload.length} characters"`
-    //   )
-    // );
-    // this.connection.sendUTF(messageJSON);
+    // Combine all the bytes, and then base64 encode the entire payload.
+    const payload = Buffer.concat(messageByteBuffers).toString("base64");
+    const message = {
+      event: "media",
+      streamSid,
+      media: {
+        payload,
+      },
+    };
+    const messageJSON = JSON.stringify(message);
+    const payloadRE = /"payload":"[^"]*"/gi;
+    log(
+      `To Twilio: A single media event containing the exact audio from your previous ${messages.length} inbound media messages`,
+      messageJSON.replace(
+        payloadRE,
+        `"payload":"an omitted base64 encoded string with length of ${message.media.payload.length} characters"`
+      )
+    );
+    this.connection.sendUTF(messageJSON);
 
-    // // Send a mark message
-    // const markMessage = {
-    //   event: "mark",
-    //   streamSid,
-    //   mark: {
-    //     name: `Repeat message ${this.repeatCount}`,
-    //   },
-    // };
-    // log("To Twilio: Sending mark event", markMessage);
-    // this.connection.sendUTF(JSON.stringify(markMessage));
+    // Send a mark message
+    const markMessage = {
+      event: "mark",
+      streamSid,
+      mark: {
+        name: `Repeat message ${this.repeatCount}`,
+      },
+    };
+    log("To Twilio: Sending mark event", markMessage);
+    this.connection.sendUTF(JSON.stringify(markMessage));
     this.repeatCount++;
 
     this.wstream.write(Buffer.concat(messageByteBuffers));
 
     if (this.repeatCount === 7) {
       log(`Server: Repeated ${this.repeatCount} times...closing`);
-      //this.connection.close(1000, "Repeated 7 times");
+      this.connection.close(1000, "Repeated 7 times");
+    }
+  }
 
-      this.wstream.write("", () => {
-        let fd = fs.openSync(this.wstream.path, "r+"); // `r+` mode is needed in order to write to arbitrary position
-        let count = this.wstream.bytesWritten;
-        count -= 58; // The header itself is 58 bytes long and we only want the data byte length
-        fs.writeSync(
-          fd,
-          Buffer.from([
-            count % 256,
-            (count >> 8) % 256,
-            (count >> 16) % 256,
-            (count >> 24) % 256,
-          ]),
-          0,
-          4, // Write 4 bytes
-          54 // starts writing at byte 54 in the file
-        );
-      });
+  /**
+   * Writes messages received from Twilio to an Array.
+   */
+  async write() {
+    const messages = [...this.messages];
+    this.messages = [];
+
+    // Decode each message and store the bytes in an array
+    const messageByteBuffers = messages.map((msg) =>
+      Buffer.from(msg.media.payload, "base64")
+    );
+
+    this.repeatCount++;
+
+    // Add the messages to our write stream.
+    this.wstream.write(Buffer.concat(messageByteBuffers));
+
+    if (this.repeatCount === 7) {
+      log(
+        `Server: Repeated ${this.repeatCount} times. Starting transcription...`
+      );
 
       await this.transcribe();
     }
   }
 
   async transcribe() {
+    this.transcribing = true;
+    // Our write streams contains the audio bits received from Twilio. The only thing left to do is
+    // add the mulaw header.
+    this.wstream.write("", () => {
+      let fd = fs.openSync(this.wstream.path, "r+"); // `r+` mode is needed in order to write to an arbitrary position
+      let count = this.wstream.bytesWritten;
+      count -= 58; // The header itself is 58 bytes long and we only want the data byte length
+      fs.writeSync(
+        fd,
+        Buffer.from([
+          count % 256,
+          (count >> 8) % 256,
+          (count >> 16) % 256,
+          (count >> 24) % 256,
+        ]),
+        0,
+        4, // Write 4 bytes
+        54 // starts writing at byte 54 in the file
+      );
+    });
+
+    log("File prepared, passing to Whisper to transcribe...");
     const transcription = await openai.audio.transcriptions.create({
       file: fs.createReadStream("audio.wav"),
       model: "whisper-1",
     });
+    log(`Whisper transcription: ${transcription.text}`);
 
-    console.log(transcription.text);
-
+    log("Passing transcription to gpt-3.5 for summarisation");
     const completion = await openai.chat.completions.create({
       messages: [
         {
@@ -280,27 +256,36 @@ class MediaStream {
     let { name, age } = JSON.parse(json);
 
     if (name && age) {
+      log(
+        "Name & age summarised from transcription. Returning control to Studio..."
+      );
+
       const res = await fetch(
-        `https://api.twilio.com/2010-04-01/Accounts/${accountSid}/Calls/${this.callSid}.json`,
+        `https://api.twilio.com/2010-04-01/Accounts/${TWILIO_ACCOUNT_SID}/Calls/${this.callSid}.json`,
         {
           method: "POST",
           headers: {
             "Content-Type": "application/x-www-form-urlencoded",
-            Authorization: "Basic " + btoa(`${accountSid}:${authToken}`),
+            Authorization:
+              "Basic " + btoa(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`),
           },
-          body: `Twiml=<?xml version="1.0" encoding="UTF-8"?><Response><Redirect>https://webhooks.twilio.com/v1/Accounts/${accountSid}/Flows/${flowSid}?FlowEvent=return%26amp%3Bname=${name}%26amp%3Bage=${age}</Redirect></Response>`,
+          body: `Twiml=<?xml version="1.0" encoding="UTF-8"?><Response><Redirect>https://webhooks.twilio.com/v1/Accounts/${TWILIO_ACCOUNT_SID}/Flows/${TWILIO_FLOW_SID}?FlowEvent=return%26amp%3Bname=${name}%26amp%3Bage=${age}</Redirect></Response>`,
         }
       );
 
       const body = await res.json();
       if (res.ok) {
-        log("OK response: ", res.status, body);
+        log("Control returned. Websocket connection closing...");
+        this.transcribing = false;
       } else {
-        log("Not OK response: ", res.status, body);
+        log("Bad response from Twilio: ", res.status, body);
+        this.connection.close(1000, "Unable to pass control back to Studio.");
+        this.transcribing = false;
       }
     } else {
       log("Name and age not identified");
       this.connection.close(1000, "Name and age not identified");
+      this.transcribing = false;
     }
   }
 
@@ -309,6 +294,6 @@ class MediaStream {
   }
 }
 
-wsserver.listen(HTTP_SERVER_PORT, function () {
-  console.log("Server listening on: http://localhost:%s", HTTP_SERVER_PORT);
+wsserver.listen(HTTP_SERVER_PORT, () => {
+  log("Server listening on: http://localhost:%s", HTTP_SERVER_PORT);
 });

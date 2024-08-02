@@ -1,0 +1,98 @@
+{
+  "description": "A simple example of bi-directional streams & AI for an 'advanced gather' widget",
+  "states": [
+    {
+      "name": "Trigger",
+      "type": "trigger",
+      "transitions": [
+        {
+          "event": "incomingMessage"
+        },
+        {
+          "next": "redirect_gather",
+          "event": "incomingCall"
+        },
+        {
+          "event": "incomingConversationMessage"
+        },
+        {
+          "event": "incomingRequest"
+        },
+        {
+          "event": "incomingParent"
+        }
+      ],
+      "properties": {
+        "offset": {
+          "x": 0,
+          "y": -10
+        }
+      }
+    },
+    {
+      "name": "redirect_gather",
+      "type": "add-twiml-redirect",
+      "transitions": [
+        {
+          "next": "say_play_name_age",
+          "event": "return"
+        },
+        {
+          "next": "say_play_issue",
+          "event": "timeout"
+        },
+        {
+          "next": "say_play_issue",
+          "event": "fail"
+        }
+      ],
+      "properties": {
+        "offset": {
+          "x": 170,
+          "y": 250
+        },
+        "method": "POST",
+        "url": "https://handler.twilio.com/twiml/EH653994feb2effc1dcdc7614c6bda24de",
+        "timeout": "14400"
+      }
+    },
+    {
+      "name": "say_play_issue",
+      "type": "say-play",
+      "transitions": [
+        {
+          "event": "audioComplete"
+        }
+      ],
+      "properties": {
+        "offset": {
+          "x": 500,
+          "y": 470
+        },
+        "loop": 1,
+        "say": "The call has timed out or failed. Goodbye."
+      }
+    },
+    {
+      "name": "say_play_name_age",
+      "type": "say-play",
+      "transitions": [
+        {
+          "event": "audioComplete"
+        }
+      ],
+      "properties": {
+        "offset": {
+          "x": 120,
+          "y": 620
+        },
+        "loop": 1,
+        "say": "Your name is {{widgets.redirect_gather.name}} and you are {{widgets.redirect_gather.age}} years old. It's nice to meet you."
+      }
+    }
+  ],
+  "initial_state": "Trigger",
+  "flags": {
+    "allow_concurrent_calls": true
+  }
+}

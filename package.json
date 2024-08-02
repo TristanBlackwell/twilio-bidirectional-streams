@@ -4,7 +4,7 @@
   "description": "Basic Connet Streams demo",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node --env-file=.env server.js"
   },
   "author": "",
   "license": "MIT",
@@ -12,6 +12,7 @@
   "dependencies": {
     "httpdispatcher": "^2.1.2",
     "openai": "^4.52.0",
-    "websocket": "^1.0.28"
+    "websocket": "^1.0.28",
+    "zod": "^3.23.8"
   }
 }
