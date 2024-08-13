@@ -32,3 +32,7 @@
 2. Copy the [`.env.example`](.env.example) to a `.env` file and populate the values.
 3. Run the server with `npm start`
 4. Update the Twiml bin to replace `<SERVER_URL>` with the URL of your server. You may need Ngrok if you are running this locally.
+
+## High-level architecture diagram
+
+![Architecture diagram](docs/images/architecture.png)
